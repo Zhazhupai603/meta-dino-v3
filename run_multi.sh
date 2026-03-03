@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python"
-PROJECT_ROOT="/inspire/qb-ilm/project/exploration-topic/jinluozhijie-CZXS25210075/dino"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # =========================
 # Train parameters (multi GPU via accelerate)
@@ -51,7 +50,7 @@ NUM_MACHINES=1
 MACHINE_RANK=0
 MAIN_PROCESS_PORT=29501
 
-cd "${PROJECT_ROOT}"
+cd "${SCRIPT_DIR}"
 
 # Force offline/local-only behavior for timm and HF hub.
 export HF_HUB_OFFLINE=1
@@ -60,7 +59,7 @@ export TRANSFORMERS_OFFLINE=1
 export TIMM_USE_HF_HUB=0
 
 CMD=(
-  "${PYTHON_BIN}" -m accelerate.commands.launch
+  python -m accelerate.commands.launch
   --num_processes "${NUM_PROCESSES}"
   --num_machines "${NUM_MACHINES}"
   --machine_rank "${MACHINE_RANK}"

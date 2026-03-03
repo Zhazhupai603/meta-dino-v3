@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python"
-PROJECT_ROOT="/inspire/qb-ilm/project/exploration-topic/jinluozhijie-CZXS25210075/dino"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # =========================
 # Train parameters (single GPU)
@@ -54,7 +53,7 @@ NOISE_STD=0.03
 # 1: freeze backbone, 0: train full model
 FREEZE_BACKBONE=0
 
-cd "${PROJECT_ROOT}"
+cd "${SCRIPT_DIR}"
 
 # Force offline/local-only behavior for timm and HF hub.
 export HF_HUB_OFFLINE=1
@@ -63,7 +62,7 @@ export TRANSFORMERS_OFFLINE=1
 export TIMM_USE_HF_HUB=0
 
 CMD=(
-  "${PYTHON_BIN}" train.py
+  python train.py
   --data_root "${DATA_ROOT}"
   --backbone_name "${BACKBONE_NAME}"
   --checkpoint_path "${CHECKPOINT_PATH}"

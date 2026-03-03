@@ -19,7 +19,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output_root",
         type=str,
-        default="/inspire/qb-ilm/project/exploration-topic/jinluozhijie-CZXS25210075/dino/download_ckpts",
+        default="download_ckpts",
         help="Root folder for downloaded checkpoints.",
     )
     parser.add_argument(

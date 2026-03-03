@@ -29,19 +29,19 @@ dino/
 Use your specified environment Python:
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python -V
+python -V
 ```
 
 Install dependencies (you said you will install timm yourself):
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python -m pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
 ## 2) Prepare merged CUBS dataset
 
 ```bash
-cd /inspire/qb-ilm/project/exploration-topic/jinluozhijie-CZXS25210075/dino
+cd dino
 ./prepare_data.sh
 ```
 
@@ -70,7 +70,7 @@ Optional quick debug (small sample):
 First download timm-format ckpt:
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python download_ckpts.py \
+python download_ckpts.py \
   --backbone_name vit_base_patch16_dinov3
 ```
 
@@ -157,7 +157,7 @@ Training artifacts:
 Single image (writes `<input_name>_mask.png` next to input):
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python predict.py \
+python predict.py \
   --input /path/to/image.png \
   --checkpoint outputs/dinov3_base_seg/checkpoints/best.pt \
   --backbone_name vit_base_patch16_dinov3
@@ -166,7 +166,7 @@ Single image (writes `<input_name>_mask.png` next to input):
 Directory mode (recursive, writes `*_mask.png` for each image):
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python predict.py \
+python predict.py \
   --input /path/to/image_root_dir \
   --checkpoint outputs/dinov3_base_seg/checkpoints/best.pt \
   --backbone_name vit_base_patch16_dinov3
@@ -179,5 +179,5 @@ Directory mode (recursive, writes `*_mask.png` for each image):
 - If model name mismatch happens, inspect available names with:
 
 ```bash
-/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python -c "import timm; print([m for m in timm.list_models('*dinov3*')])"
+python -c "import timm; print([m for m in timm.list_models('*dinov3*')])"
 ```

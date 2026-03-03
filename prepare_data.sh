@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-PYTHON_BIN="/inspire/hdd/project/exploration-topic/public/lzjjin/anaconda3/envs/ssl/bin/python"
-PROJECT_ROOT="/inspire/qb-ilm/project/exploration-topic/jinluozhijie-CZXS25210075/dino"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 # =========================
 # Data prepare parameters
@@ -30,10 +29,10 @@ MAX_SAMPLES_V1=-1
 MAX_SAMPLES_V2=-1
 MAX_SAMPLES_CCA=-1
 
-cd "${PROJECT_ROOT}"
+cd "${SCRIPT_DIR}"
 
 CMD=(
-  "${PYTHON_BIN}" data/prepare_data.py
+  python data/prepare_data.py
   --datasets "${DATASETS}"
   --cubs_v1_root "${CUBS_V1_ROOT}"
   --cubs_v2_root "${CUBS_V2_ROOT}"
