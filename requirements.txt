@@ -1,0 +1,8 @@
+torch
+torchvision
+timm
+safetensors
+accelerate
+numpy
+pandas
+Pillow

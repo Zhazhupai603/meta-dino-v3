@@ -1,0 +1,20 @@
+__pycache__/
+*.pyc
+
+# Model weights / checkpoints
+*.pt
+*.pth
+*.ckpt
+*.bin
+*.safetensors
+
+# Downloaded checkpoints
+download_ckpts/
+
+# Generated training outputs
+outputs/
+
+# Local data artifacts
+data/raw_downloads/
+data/extracted/
+data/processed/
