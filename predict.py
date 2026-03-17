@@ -24,7 +24,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--backbone_name", type=str, default="vit_base_patch16_dinov3")
     parser.add_argument("--image_size", type=int, default=512)
-    parser.add_argument("--num_classes", type=int, default=2)
+    parser.add_argument("--num_classes", type=int, default=0)
     return parser.parse_args()
 
 
@@ -58,14 +58,34 @@ def clean_state_dict(state_dict: Dict[str, torch.Tensor]) -> Dict[str, torch.Ten
     return cleaned
 
 
-def load_model(args: argparse.Namespace, device: torch.device) -> DINOv3SegModel:
+def infer_num_classes(args: argparse.Namespace, checkpoint_obj: Dict[str, object]) -> int:
+    if args.num_classes >= 2:
+        return args.num_classes
+    num_classes = checkpoint_obj.get("num_classes")
+    if isinstance(num_classes, int) and num_classes >= 2:
+        return num_classes
+    inner_args = checkpoint_obj.get("args")
+    if isinstance(inner_args, dict):
+        maybe_num_classes = inner_args.get("num_classes")
+        if isinstance(maybe_num_classes, int) and maybe_num_classes >= 2:
+            return maybe_num_classes
+    return 2
+
+
+def mask_to_uint8(mask: np.ndarray, num_classes: int) -> np.ndarray:
+    if num_classes == 3:
+        out = np.zeros_like(mask, dtype=np.uint8)
+        out[mask == 1] = 127
+        out[mask == 2] = 255
+        return out
+    if num_classes <= 1:
+        return mask.astype(np.uint8)
+    scale = 255.0 / float(max(num_classes - 1, 1))
+    return np.clip(mask.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+
+
+def load_model(args: argparse.Namespace, device: torch.device) -> tuple[DINOv3SegModel, int]:
     enforce_offline_mode()
-    model = DINOv3SegModel(
-        backbone_name=args.backbone_name,
-        checkpoint_path=None,
-        num_classes=args.num_classes,
-        freeze_backbone=False,
-    )
     try:
         raw = torch.load(args.checkpoint, map_location="cpu")
     except pickle.UnpicklingError:
@@ -77,11 +97,19 @@ def load_model(args: argparse.Namespace, device: torch.device) -> DINOv3SegModel
     else:
         raise ValueError(f"Unsupported checkpoint format: {type(raw)}")
 
+    num_classes = infer_num_classes(args, raw if isinstance(raw, dict) else {})
+    model = DINOv3SegModel(
+        backbone_name=args.backbone_name,
+        checkpoint_path=None,
+        num_classes=num_classes,
+        freeze_backbone=False,
+    )
+
     msg = model.load_state_dict(clean_state_dict(state_dict), strict=False)
     print("Checkpoint load message:", msg)
     model.to(device)
     model.eval()
-    return model
+    return model, num_classes
 
 
 def preprocess(image_path: Path, image_size: int) -> tuple[torch.Tensor, tuple[int, int]]:
@@ -113,11 +141,13 @@ def predict_one(
     out_path: Path,
     image_size: int,
     device: torch.device,
+    num_classes: int,
 ) -> None:
     image_tensor, orig_size = preprocess(image_path, image_size)
     image_tensor = image_tensor.to(device, non_blocking=True)
     logits = model(image_tensor)
-    pred = torch.argmax(logits, dim=1)[0].detach().cpu().numpy().astype(np.uint8) * 255
+    pred = torch.argmax(logits, dim=1)[0].detach().cpu().numpy().astype(np.uint8)
+    pred = mask_to_uint8(pred, num_classes)
     pred_img = Image.fromarray(pred, mode="L").resize(orig_size, resample=Image.NEAREST)
     pred_img.save(out_path)
 
@@ -129,7 +159,7 @@ def main() -> None:
 
     device = torch.device("cuda:0")
     images = collect_images(args.input)
-    model = load_model(args, device=device)
+    model, num_classes = load_model(args, device=device)
 
     for idx, image_path in enumerate(images, start=1):
         out_path = output_path_for(image_path)
@@ -139,6 +169,7 @@ def main() -> None:
             out_path=out_path,
             image_size=args.image_size,
             device=device,
+            num_classes=num_classes,
         )
         print(f"[{idx}/{len(images)}] {image_path} -> {out_path}")
 

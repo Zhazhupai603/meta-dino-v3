@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import List, Tuple
@@ -48,6 +49,7 @@ class CubsSegDataset(Dataset):
         self.train = train
         self.augment = augment
         self.df = pd.read_csv(self.csv_path)
+        self.num_classes = self._infer_num_classes()
         self.samples: List[Tuple[Path, Path]] = []
         for _, row in self.df.iterrows():
             image_path = self.root_dir / row["image_relpath"]
@@ -63,6 +65,22 @@ class CubsSegDataset(Dataset):
             mean=[0.485, 0.456, 0.406],
             std=[0.229, 0.224, 0.225],
         )
+
+    def _infer_num_classes(self) -> int:
+        summary_path = self.root_dir / "dataset_summary.json"
+        if summary_path.exists():
+            try:
+                with summary_path.open("r", encoding="utf-8") as file:
+                    summary = json.load(file)
+                num_classes = int(summary.get("num_classes", 2))
+                return max(num_classes, 2)
+            except Exception:
+                return 2
+        return 2
+
+    def _decode_mask(self, mask: Image.Image) -> np.ndarray:
+        mask_np = np.array(mask, dtype=np.uint8)
+        return np.clip(mask_np, 0, self.num_classes - 1).astype(np.int64)
 
     def __getitem__(self, index: int):
         image_path, mask_path = self.samples[index]
@@ -148,8 +166,8 @@ class CubsSegDataset(Dataset):
         image_tensor = image_tensor.repeat(3, 1, 1)  # [3,H,W] for ViT
         image_tensor = self._normalize(image_tensor)
 
-        mask_np = (np.array(mask, dtype=np.uint8) > 0).astype(np.int64)
-        mask_tensor = torch.from_numpy(mask_np)  # [H,W], 0/1
+        mask_np = self._decode_mask(mask)
+        mask_tensor = torch.from_numpy(mask_np)  # [H,W], class ids
 
         return {
             "image": image_tensor,

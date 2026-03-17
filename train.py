@@ -4,7 +4,7 @@ import argparse
 import json
 import random
 from pathlib import Path
-from typing import Dict
+from typing import Dict, List
 
 import numpy as np
 import torch
@@ -19,25 +19,53 @@ from model.dinov3_seg import DINOv3SegModel
 
 
 def dice_loss(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> torch.Tensor:
-    probs = torch.softmax(logits, dim=1)[:, 1]
-    target = target.float()
-    inter = (probs * target).sum(dim=(1, 2))
-    union = probs.sum(dim=(1, 2)) + target.sum(dim=(1, 2))
+    num_classes = logits.shape[1]
+    probs = torch.softmax(logits, dim=1)
+    target = torch.nn.functional.one_hot(target, num_classes=num_classes).permute(0, 3, 1, 2).float()
+    probs = probs[:, 1:]
+    target = target[:, 1:]
+    inter = (probs * target).sum(dim=(2, 3))
+    union = probs.sum(dim=(2, 3)) + target.sum(dim=(2, 3))
     dice = (2 * inter + eps) / (union + eps)
     return 1.0 - dice.mean()
 
 
 def batch_metrics(logits: torch.Tensor, target: torch.Tensor, eps: float = 1e-6) -> Dict[str, torch.Tensor]:
     pred = torch.argmax(logits, dim=1)
-    pred_f = pred.float()
-    target_f = target.float()
-    inter = (pred_f * target_f).sum(dim=(1, 2))
-    pred_sum = pred_f.sum(dim=(1, 2))
-    tgt_sum = target_f.sum(dim=(1, 2))
+    num_classes = logits.shape[1]
+    pred_f = torch.nn.functional.one_hot(pred, num_classes=num_classes).permute(0, 3, 1, 2).float()[:, 1:]
+    target_f = torch.nn.functional.one_hot(target, num_classes=num_classes).permute(0, 3, 1, 2).float()[:, 1:]
+    inter = (pred_f * target_f).sum(dim=(2, 3))
+    pred_sum = pred_f.sum(dim=(2, 3))
+    tgt_sum = target_f.sum(dim=(2, 3))
     union = pred_sum + tgt_sum - inter
     dice = ((2 * inter + eps) / (pred_sum + tgt_sum + eps)).mean()
     iou = ((inter + eps) / (union + eps)).mean()
     return {"dice": dice, "iou": iou}
+
+
+def infer_num_classes(data_root: Path) -> int:
+    summary_path = data_root / "dataset_summary.json"
+    if summary_path.exists():
+        with summary_path.open("r", encoding="utf-8") as file:
+            summary = json.load(file)
+        num_classes = summary.get("num_classes")
+        if isinstance(num_classes, int) and num_classes >= 2:
+            return num_classes
+    return 2
+
+
+def infer_class_mapping(data_root: Path, num_classes: int) -> Dict[str, int]:
+    summary_path = data_root / "dataset_summary.json"
+    if summary_path.exists():
+        with summary_path.open("r", encoding="utf-8") as file:
+            summary = json.load(file)
+        class_mapping = summary.get("class_mapping")
+        if isinstance(class_mapping, dict):
+            return {str(k): int(v) for k, v in class_mapping.items()}
+    if num_classes == 3:
+        return {"background": 0, "artifact_fake": 1, "real_artery": 2}
+    return {"background": 0, "foreground": 1}
 
 
 def run_epoch(
@@ -47,10 +75,11 @@ def run_epoch(
     accelerator: Accelerator,
     ce_weight: float,
     dice_weight: float,
+    class_weights: torch.Tensor | None,
 ) -> Dict[str, float]:
     training = optimizer is not None
     model.train(training)
-    ce_loss_fn = nn.CrossEntropyLoss()
+    ce_loss_fn = nn.CrossEntropyLoss(weight=class_weights)
 
     local_loss_sum = torch.tensor(0.0, device=accelerator.device)
     local_dice_sum = torch.tensor(0.0, device=accelerator.device)
@@ -139,6 +168,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--blur_kernel_size", type=int, default=3)
     parser.add_argument("--noise_prob", type=float, default=0.2)
     parser.add_argument("--noise_std", type=float, default=0.03)
+    parser.add_argument("--class_weights", type=str, default="")
+    parser.add_argument("--auto_class_weights", action="store_true")
     return parser.parse_args()
 
 
@@ -151,6 +182,43 @@ def _denorm_to_uint8(image_tensor: torch.Tensor) -> np.ndarray:
     return (image.numpy() * 255.0).astype(np.uint8)
 
 
+def _mask_to_uint8(mask: np.ndarray, num_classes: int) -> np.ndarray:
+    if num_classes == 3:
+        out = np.zeros_like(mask, dtype=np.uint8)
+        out[mask == 1] = 127
+        out[mask == 2] = 255
+        return out
+    if num_classes <= 1:
+        return mask.astype(np.uint8)
+    scale = 255.0 / float(max(num_classes - 1, 1))
+    return np.clip(mask.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+
+
+def parse_class_weights(raw: str, num_classes: int) -> List[float] | None:
+    raw = raw.strip()
+    if not raw:
+        return None
+    values = [float(item.strip()) for item in raw.split(",") if item.strip()]
+    if len(values) != num_classes:
+        raise ValueError(f"class_weights expects {num_classes} values, got {len(values)}")
+    return values
+
+
+def estimate_class_weights(train_csv: Path, data_root: Path, num_classes: int) -> List[float]:
+    import pandas as pd
+
+    df = pd.read_csv(train_csv)
+    counts = np.zeros(num_classes, dtype=np.float64)
+    for _, row in df.iterrows():
+        mask = np.array(Image.open(data_root / row["mask_relpath"]).convert("L"), dtype=np.uint8)
+        if mask.max(initial=0) > num_classes - 1:
+            mask = np.rint(mask.astype(np.float32) * float(num_classes - 1) / 255.0).astype(np.uint8)
+        counts += np.bincount(mask.reshape(-1), minlength=num_classes).astype(np.float64)
+    counts = np.maximum(counts, 1.0)
+    weights = counts.sum() / (num_classes * counts)
+    return weights.tolist()
+
+
 @torch.no_grad()
 def generate_val_predictions(
     model: nn.Module,
@@ -160,6 +228,7 @@ def generate_val_predictions(
     epoch: int,
     count: int,
     seed: int,
+    num_classes: int,
 ) -> None:
     if count <= 0 or len(dataset) == 0:
         return
@@ -183,15 +252,15 @@ def generate_val_predictions(
         sample = dataset[idx]
         image = sample["image"].unsqueeze(0).to(accelerator.device, non_blocking=True)
         logits = model(image)
-        pred = torch.argmax(logits, dim=1)[0].detach().cpu().numpy().astype(np.uint8) * 255
-        gt = sample["mask"].detach().cpu().numpy().astype(np.uint8) * 255
+        pred = torch.argmax(logits, dim=1)[0].detach().cpu().numpy().astype(np.uint8)
+        gt = sample["mask"].detach().cpu().numpy().astype(np.uint8)
         img = _denorm_to_uint8(sample["image"])
 
         stem = Path(sample["image_path"]).stem
         file_name = f"{rank:02d}_{stem}.png"
         Image.fromarray(img, mode="L").save(images_dir / file_name)
-        Image.fromarray(pred, mode="L").save(pred_masks_dir / file_name)
-        Image.fromarray(gt, mode="L").save(gt_masks_dir / file_name)
+        Image.fromarray(_mask_to_uint8(pred, num_classes), mode="L").save(pred_masks_dir / file_name)
+        Image.fromarray(_mask_to_uint8(gt, num_classes), mode="L").save(gt_masks_dir / file_name)
 
 
 def prune_interval_checkpoints(checkpoints_dir: Path, max_interval_ckpts: int) -> None:
@@ -221,6 +290,9 @@ def main() -> None:
     accelerator.wait_for_everyone()
 
     accelerator.print(f"Using device: {accelerator.device}")
+    num_classes = infer_num_classes(args.data_root)
+    class_mapping = infer_class_mapping(args.data_root, num_classes)
+    accelerator.print(f"Detected class mapping: {class_mapping}")
 
     train_csv = args.data_root / "splits/train.csv"
     val_csv = args.data_root / "splits/val.csv"
@@ -279,10 +351,18 @@ def main() -> None:
         drop_last=False,
     )
 
+    parsed_class_weights = parse_class_weights(args.class_weights, num_classes)
+    if parsed_class_weights is None and args.auto_class_weights:
+        parsed_class_weights = estimate_class_weights(train_csv, args.data_root, num_classes)
+    class_weights = None
+    if parsed_class_weights is not None:
+        class_weights = torch.tensor(parsed_class_weights, dtype=torch.float32, device=accelerator.device)
+        accelerator.print(f"Using class weights: {parsed_class_weights}")
+
     model = DINOv3SegModel(
         backbone_name=args.backbone_name,
         checkpoint_path=args.checkpoint_path if args.checkpoint_path.exists() else None,
-        num_classes=2,
+        num_classes=num_classes,
         freeze_backbone=args.freeze_backbone,
     )
 
@@ -309,6 +389,7 @@ def main() -> None:
             accelerator=accelerator,
             ce_weight=args.ce_weight,
             dice_weight=args.dice_weight,
+            class_weights=class_weights,
         )
         should_validate = args.val_interval > 0 and (epoch % args.val_interval == 0 or epoch == args.epochs)
         val_stats: Dict[str, float] | None = None
@@ -321,6 +402,7 @@ def main() -> None:
                     accelerator=accelerator,
                     ce_weight=args.ce_weight,
                     dice_weight=args.dice_weight,
+                    class_weights=class_weights,
                 )
             last_val_stats = val_stats
 
@@ -347,6 +429,9 @@ def main() -> None:
                 "optimizer_state_dict": optimizer.state_dict(),
                 "val_dice": None if last_val_stats is None else last_val_stats["dice"],
                 "args": vars(args),
+                "num_classes": num_classes,
+                "class_mapping": class_mapping,
+                "class_weights": parsed_class_weights,
             }
             torch.save(checkpoint, checkpoints_dir / "last.pt")
             if val_stats is not None and val_stats["dice"] > best_dice:
@@ -365,6 +450,7 @@ def main() -> None:
                     epoch=epoch,
                     count=args.val_generate_count,
                     seed=args.seed,
+                    num_classes=num_classes,
                 )
 
             with (args.output_dir / "history.json").open("w", encoding="utf-8") as file:

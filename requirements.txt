@@ -6,3 +6,5 @@ accelerate
 numpy
 pandas
 Pillow
+scipy
+tqdm

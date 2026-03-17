@@ -1,0 +1,19 @@
+{
+  "image": "test_data/1.png",
+  "bbox_xyxy": [
+    54,
+    88,
+    158,
+    193
+  ],
+  "predicted_class": "artifact_fake",
+  "scores": {
+    "artifact_fake": 0.9486040472984314,
+    "real_artery": 0.05139593407511711
+  },
+  "output_mask_rule": {
+    "artifact_fake": 127,
+    "real_artery": 0,
+    "background": 0
+  }
+}
